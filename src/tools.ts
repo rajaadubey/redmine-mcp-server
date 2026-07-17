@@ -53,15 +53,19 @@ function formatStatusList(statuses: RedmineIssueStatus[]): string {
 }
 
 export function registerRedmineTools(server: McpServer, client: RedmineClient) {
-  server.tool(
+  server.registerTool(
     "list_my_issues",
-    "List Redmine issues assigned to the current user (identified by the configured API key).",
     {
-      status: z
-        .enum(["open", "closed", "all"])
-        .optional()
-        .describe("Filter by status. Defaults to 'open'."),
-      limit: z.number().int().positive().max(100).optional().describe("Max issues to return (default 25)."),
+      title: "List my issues",
+      description: "List Redmine issues assigned to the current user (identified by the configured API key).",
+      inputSchema: {
+        status: z
+          .enum(["open", "closed", "all"])
+          .optional()
+          .describe("Filter by status. Defaults to 'open'."),
+        limit: z.number().int().positive().max(100).optional().describe("Max issues to return (default 25)."),
+      },
+      annotations: { readOnlyHint: true },
     },
     async ({ status, limit }) => {
       const me = await client.getCurrentUser();
@@ -82,11 +86,15 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.tool(
+  server.registerTool(
     "get_issue",
-    "Get full details of a single Redmine issue, including its description and comment/change history.",
     {
-      issue_id: z.number().int().positive().describe("The Redmine issue ID."),
+      title: "Get issue",
+      description: "Get full details of a single Redmine issue, including its description and comment/change history.",
+      inputSchema: {
+        issue_id: z.number().int().positive().describe("The Redmine issue ID."),
+      },
+      annotations: { readOnlyHint: true },
     },
     async ({ issue_id }) => {
       const issue = await client.getIssue(issue_id, { includeJournals: true });
@@ -94,27 +102,35 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.tool(
+  server.registerTool(
     "list_issue_statuses",
-    "List the issue statuses available in this Redmine instance (name and id), useful for update_issue.",
-    {},
+    {
+      title: "List issue statuses",
+      description: "List the issue statuses available in this Redmine instance (name and id), useful for update_issue.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
     async () => {
       const statuses = await client.listIssueStatuses();
       return { content: [{ type: "text", text: formatStatusList(statuses) }] };
     },
   );
 
-  server.tool(
+  server.registerTool(
     "update_issue",
-    "Update a Redmine issue's status, % done, and/or add a note describing the update.",
     {
-      issue_id: z.number().int().positive().describe("The Redmine issue ID."),
-      status: z
-        .string()
-        .optional()
-        .describe("New status name, e.g. 'In Progress', 'Resolved', 'Closed'. Must match an existing status (see list_issue_statuses)."),
-      done_ratio: z.number().int().min(0).max(100).optional().describe("New % done (0-100)."),
-      notes: z.string().optional().describe("Note to attach to this update."),
+      title: "Update issue",
+      description: "Update a Redmine issue's status, % done, and/or add a note describing the update.",
+      inputSchema: {
+        issue_id: z.number().int().positive().describe("The Redmine issue ID."),
+        status: z
+          .string()
+          .optional()
+          .describe("New status name, e.g. 'In Progress', 'Resolved', 'Closed'. Must match an existing status (see list_issue_statuses)."),
+        done_ratio: z.number().int().min(0).max(100).optional().describe("New % done (0-100)."),
+        notes: z.string().optional().describe("Note to attach to this update."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async ({ issue_id, status, done_ratio, notes }) => {
       const payload: { status_id?: number; done_ratio?: number; notes?: string } = {};
@@ -155,12 +171,16 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.tool(
+  server.registerTool(
     "add_comment",
-    "Add a comment to a Redmine issue without changing any of its fields.",
     {
-      issue_id: z.number().int().positive().describe("The Redmine issue ID."),
-      comment: z.string().min(1).describe("The comment text to add."),
+      title: "Add comment",
+      description: "Add a comment to a Redmine issue without changing any of its fields.",
+      inputSchema: {
+        issue_id: z.number().int().positive().describe("The Redmine issue ID."),
+        comment: z.string().min(1).describe("The comment text to add."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async ({ issue_id, comment }) => {
       await client.updateIssue(issue_id, { notes: comment });
@@ -168,10 +188,14 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.tool(
+  server.registerTool(
     "list_projects",
-    "List Redmine projects visible to the current user (id, identifier, name).",
-    {},
+    {
+      title: "List projects",
+      description: "List Redmine projects visible to the current user (id, identifier, name).",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
     async () => {
       const projects = await client.listProjects();
       const text = projects
