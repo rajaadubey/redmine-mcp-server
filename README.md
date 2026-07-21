@@ -27,16 +27,56 @@ Yes. This is not a wrapper or mock of the interface — it's a standards-complia
    ```
 4. Copy `.env.example` to `.env` and fill in `REDMINE_URL` and `REDMINE_API_KEY` (only needed for local testing — see registration below for how Claude Code passes these in).
 
+## Installing as a global command
+
+The package ships a `bin` entry (`redmine-mcp-server`), so once built it can be linked or
+installed globally and run from anywhere, instead of pointing at an absolute path to
+`dist/index.js`.
+
+**From a local clone (not yet published to npm):**
+
+```bash
+npm install
+npm run build
+npm link          # registers the `redmine-mcp-server` command globally
+```
+
+Run `npm unlink -g redmine-mcp-server` to remove it later.
+
+**If published to npm:**
+
+```bash
+npm install -g redmine-mcp-server
+```
+
+Either way, you can now just run `redmine-mcp-server` from any directory.
+
 ## Registering with Claude Code
 
 ```bash
 claude mcp add redmine-mcp-server \
   --env REDMINE_URL=https://redmine.example.com \
   --env REDMINE_API_KEY=your_api_key_here \
-  -- node /absolute/path/to/redmine-mcp-server/dist/index.js
+  -- redmine-mcp-server
 ```
 
 Or add directly to your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "redmine-mcp-server": {
+      "command": "redmine-mcp-server",
+      "env": {
+        "REDMINE_URL": "https://redmine.example.com",
+        "REDMINE_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+If you'd rather not install it globally, the old form still works:
 
 ```json
 {
