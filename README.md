@@ -97,15 +97,20 @@ If you'd rather not install it globally, the old form still works:
 
 - **list_my_issues** — list issues assigned to you (`status`: open/closed/all).
 - **get_issue** — full details + comment history for one issue.
-- **list_issue_statuses** — valid status names/ids for this Redmine instance.
+- **search_issues** — filter issues by project/subject/status/assignee.
+- **search** — full-text search across issues (and optionally wiki + news).
+- **list_enumerations** — valid status, tracker and priority names/ids for this Redmine instance.
 - **update_issue** — change status/% done and/or add a note.
 - **add_comment** — add a comment without changing fields.
+- **create_issue** — create an issue in a project.
 - **list_projects** — list visible projects (id/identifier/name).
 
 ## Example prompts
 
 - "What are my open tickets?"
 - "Show me the details and history of issue 1234."
+- "Find open bugs in the web project mentioning login."
+- "Create a bug in the web project: checkout page 500s on submit."
 - "Mark issue 1234 as Resolved and note that it's deployed to prod."
 - "Add a comment to issue 1234 saying I'm blocked on QA."
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RedmineClient, RedmineIssue, RedmineIssueStatus } from "./redmine.js";
+import { RedmineClient, RedmineIssue, RedmineIssueStatus, RedmineNamed } from "./redmine.js";
 
 function formatIssueSummary(issue: RedmineIssue): string {
   return [
@@ -44,6 +44,15 @@ async function resolveStatusId(
   const statuses = await client.listIssueStatuses();
   const match = statuses.find((s) => s.name.toLowerCase() === status.toLowerCase());
   return match ? { id: match.id, name: match.name } : null;
+}
+
+function formatNamedList(items: RedmineNamed[]): string {
+  return items.map((i) => `${i.id}: ${i.name}`).join("\n");
+}
+
+/** Resolve a tracker/priority name to its id, case-insensitively. */
+function resolveNamed(items: RedmineNamed[], name: string): RedmineNamed | undefined {
+  return items.find((i) => i.name.toLowerCase() === name.toLowerCase());
 }
 
 function formatStatusList(statuses: RedmineIssueStatus[]): string {
@@ -103,16 +112,164 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
   );
 
   server.registerTool(
-    "list_issue_statuses",
+    "list_enumerations",
     {
-      title: "List issue statuses",
-      description: "List the issue statuses available in this Redmine instance (name and id), useful for update_issue.",
+      title: "List enumerations",
+      description:
+        "List the statuses, trackers and priorities available in this Redmine instance (name and id), needed by update_issue and create_issue.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const statuses = await client.listIssueStatuses();
-      return { content: [{ type: "text", text: formatStatusList(statuses) }] };
+      const [statuses, trackers, priorities] = await Promise.all([
+        client.listIssueStatuses(),
+        client.listTrackers(),
+        client.listPriorities(),
+      ]);
+      const text = [
+        "Statuses:",
+        formatStatusList(statuses),
+        "",
+        "Trackers:",
+        formatNamedList(trackers),
+        "",
+        "Priorities:",
+        formatNamedList(priorities),
+      ].join("\n");
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "search_issues",
+    {
+      title: "Search issues",
+      description:
+        "Search issues by project, status, assignee and/or subject text. All filters are optional; with none, returns the most recently updated issues.",
+      inputSchema: {
+        project: z.string().optional().describe("Project identifier or numeric id (see list_projects)."),
+        subject: z.string().optional().describe("Substring to match against the issue subject."),
+        status: z
+          .enum(["open", "closed", "all"])
+          .optional()
+          .describe("Filter by status. Defaults to 'open'."),
+        assigned_to_me: z.boolean().optional().describe("Only issues assigned to the current user."),
+        limit: z.number().int().positive().max(100).optional().describe("Max issues to return (default 25)."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ project, subject, status, assigned_to_me, limit }) => {
+      const { issues, total_count } = await client.listIssues({
+        projectId: project,
+        subject,
+        statusId: status ?? "open",
+        assignedToId: assigned_to_me ? (await client.getCurrentUser()).id : undefined,
+        limit,
+      });
+
+      if (issues.length === 0) {
+        return { content: [{ type: "text", text: "No matching issues found." }] };
+      }
+
+      const text = `Found ${total_count} issue(s), showing ${issues.length}:\n\n${issues
+        .map(formatIssueSummary)
+        .join("\n\n")}`;
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "search",
+    {
+      title: "Search Redmine",
+      description:
+        "Full-text search across Redmine. Use this when you have keywords but no issue id; use search_issues when you want to filter by project/status/assignee instead.",
+      inputSchema: {
+        query: z.string().min(1).describe("Search keywords."),
+        project: z.string().optional().describe("Restrict to a project identifier or numeric id."),
+        include_wiki: z.boolean().optional().describe("Also search wiki pages (default false)."),
+        include_news: z.boolean().optional().describe("Also search news (default false)."),
+        limit: z.number().int().positive().max(100).optional().describe("Max results (default 25)."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ query, project, include_wiki, include_news, limit }) => {
+      const { results, total_count } = await client.search({
+        q: query,
+        projectId: project,
+        scope: { issues: true, wiki_pages: include_wiki, news: include_news },
+        limit,
+      });
+
+      if (results.length === 0) {
+        return { content: [{ type: "text", text: `No results for "${query}".` }] };
+      }
+
+      const text = `Found ${total_count} result(s), showing ${results.length}:\n\n${results
+        .map((r) => `[${r.type}] ${r.title}\n  ${r.url}${r.description ? `\n  ${r.description.trim()}` : ""}`)
+        .join("\n\n")}`;
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "create_issue",
+    {
+      title: "Create issue",
+      description: "Create a new Redmine issue in a project.",
+      inputSchema: {
+        project: z.string().describe("Project identifier or numeric id (see list_projects)."),
+        subject: z.string().min(1).describe("Issue subject / title."),
+        description: z.string().optional().describe("Issue description body."),
+        tracker: z.string().optional().describe("Tracker name, e.g. 'Bug', 'Feature' (see list_enumerations)."),
+        priority: z.string().optional().describe("Priority name, e.g. 'Normal', 'High' (see list_enumerations)."),
+        assign_to_me: z.boolean().optional().describe("Assign the new issue to the current user."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ project, subject, description, tracker, priority, assign_to_me }) => {
+      let tracker_id: number | undefined;
+      if (tracker) {
+        const trackers = await client.listTrackers();
+        const match = resolveNamed(trackers, tracker);
+        if (!match) {
+          return {
+            content: [
+              { type: "text", text: `Unknown tracker "${tracker}". Available:\n${formatNamedList(trackers)}` },
+            ],
+            isError: true,
+          };
+        }
+        tracker_id = match.id;
+      }
+
+      let priority_id: number | undefined;
+      if (priority) {
+        const priorities = await client.listPriorities();
+        const match = resolveNamed(priorities, priority);
+        if (!match) {
+          return {
+            content: [
+              { type: "text", text: `Unknown priority "${priority}". Available:\n${formatNamedList(priorities)}` },
+            ],
+            isError: true,
+          };
+        }
+        priority_id = match.id;
+      }
+
+      const issue = await client.createIssue({
+        project_id: project,
+        subject,
+        description,
+        tracker_id,
+        priority_id,
+        assigned_to_id: assign_to_me ? (await client.getCurrentUser()).id : undefined,
+      });
+
+      return {
+        content: [{ type: "text", text: `Created issue #${issue.id}.\n\n${formatIssueSummary(issue)}` }],
+      };
     },
   );
 
@@ -126,7 +283,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
         status: z
           .string()
           .optional()
-          .describe("New status name, e.g. 'In Progress', 'Resolved', 'Closed'. Must match an existing status (see list_issue_statuses)."),
+          .describe("New status name, e.g. 'In Progress', 'Resolved', 'Closed'. Must match an existing status (see list_enumerations)."),
         done_ratio: z.number().int().min(0).max(100).optional().describe("New % done (0-100)."),
         notes: z.string().optional().describe("Note to attach to this update."),
       },

@@ -49,6 +49,20 @@ export interface RedmineIssue {
   journals?: RedmineJournal[];
 }
 
+export interface RedmineNamed {
+  id: number;
+  name: string;
+}
+
+export interface RedmineSearchResult {
+  id: number;
+  title: string;
+  type: string;
+  url: string;
+  description?: string;
+  datetime?: string;
+}
+
 interface RedmineErrorBody {
   errors?: string[];
 }
@@ -136,7 +150,8 @@ export class RedmineClient {
   async listIssues(params: {
     assignedToId?: number | "me";
     statusId?: string;
-    projectId?: number;
+    projectId?: number | string;
+    subject?: string;
     limit?: number;
     offset?: number;
     sort?: string;
@@ -149,6 +164,7 @@ export class RedmineClient {
           assigned_to_id: params.assignedToId,
           status_id: params.statusId,
           project_id: params.projectId,
+          subject: params.subject ? `~${params.subject}` : undefined,
           limit: params.limit ?? 25,
           offset: params.offset,
           sort: params.sort ?? "updated_on:desc",
@@ -183,6 +199,58 @@ export class RedmineClient {
       query: { limit: 100 },
     });
     return data!.projects;
+  }
+
+  async createIssue(payload: {
+    project_id: number | string;
+    subject: string;
+    description?: string;
+    tracker_id?: number;
+    priority_id?: number;
+    assigned_to_id?: number;
+  }): Promise<RedmineIssue> {
+    const data = await this.request<{ issue: RedmineIssue }>("POST", "/issues.json", {
+      body: { issue: payload },
+    });
+    return data!.issue;
+  }
+
+  /** Full-text search across issues, wiki pages and news. */
+  async search(params: {
+    q: string;
+    projectId?: number | string;
+    scope?: { issues?: boolean; wiki_pages?: boolean; news?: boolean };
+    limit?: number;
+  }): Promise<{ results: RedmineSearchResult[]; total_count: number }> {
+    const scope = params.scope ?? { issues: true };
+    const path = params.projectId ? `/projects/${params.projectId}/search.json` : "/search.json";
+    const data = await this.request<{ results: RedmineSearchResult[]; total_count: number }>(
+      "GET",
+      path,
+      {
+        query: {
+          q: params.q,
+          issues: scope.issues ? 1 : undefined,
+          wiki_pages: scope.wiki_pages ? 1 : undefined,
+          news: scope.news ? 1 : undefined,
+          limit: params.limit ?? 25,
+        },
+      },
+    );
+    return data!;
+  }
+
+  async listTrackers(): Promise<RedmineNamed[]> {
+    const data = await this.request<{ trackers: RedmineNamed[] }>("GET", "/trackers.json");
+    return data!.trackers;
+  }
+
+  async listPriorities(): Promise<RedmineNamed[]> {
+    const data = await this.request<{ issue_priorities: RedmineNamed[] }>(
+      "GET",
+      "/enumerations/issue_priorities.json",
+    );
+    return data!.issue_priorities;
   }
 
   async listIssueStatuses(): Promise<RedmineIssueStatus[]> {
