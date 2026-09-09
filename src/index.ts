@@ -6,19 +6,21 @@ import { registerRedmineTools } from "./tools.js";
 import { log, errorInfo, logFile } from "./logger.js";
 import { login, configFile } from "./config.js";
 
+const VERSION = "1.1.0";
+
 async function main() {
   if (process.argv[2] === "login") {
     await login();
     return;
   }
 
-  log("info", "server_starting", { pid: process.pid, version: "0.1.0", config: configFile });
+  log("info", "server_starting", { pid: process.pid, version: VERSION, config: configFile });
 
   const client = new RedmineClient();
 
   const server = new McpServer({
     name: "redmine-mcp-server",
-    version: "0.1.0",
+    version: VERSION,
   });
 
   registerRedmineTools(server, client);
