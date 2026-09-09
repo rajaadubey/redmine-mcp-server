@@ -2,8 +2,7 @@ import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-const PREFERRED = "/var/log/redmine-mcp.log";
-const FALLBACK = join(homedir(), ".local", "state", "redmine-mcp.log");
+const DEFAULT_LOG = join(homedir(), ".redmine-mcp.log");
 
 /** Values whose contents must never reach the log. */
 const SECRET_KEYS = /api[-_]?key|token|password|secret/i;
@@ -18,10 +17,9 @@ function tryOpen(path: string): string | null {
   }
 }
 
-// Resolved once at startup: explicit override, then /var/log, then a
-// user-writable fallback (/var/log needs root on most systems).
-export const logFile =
-  tryOpen(process.env.REDMINE_MCP_LOG ?? PREFERRED) ?? tryOpen(FALLBACK);
+// Resolved once at startup. Home is always writable, so there is nothing to
+// fall back to: if this fails, something is wrong and we say so on stderr.
+export const logFile = tryOpen(process.env.REDMINE_MCP_LOG ?? DEFAULT_LOG);
 
 let warned = false;
 
@@ -47,7 +45,7 @@ export function log(
   if (!logFile) {
     if (!warned) {
       warned = true;
-      console.error(`redmine-mcp: no writable log file (tried ${PREFERRED} and ${FALLBACK})`);
+      console.error(`redmine-mcp: log file is not writable: ${process.env.REDMINE_MCP_LOG ?? DEFAULT_LOG}`);
     }
     return;
   }
