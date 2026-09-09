@@ -98,11 +98,11 @@ arguments, each tool result or failure, and every HTTP request/response with sta
 The API key is never logged, and any field named like a key/token/password/secret is redacted.
 Nothing is ever written to stdout — that channel belongs to the MCP protocol.
 
-The log goes to `/var/logs/redmine-mcp.log`. That directory is root-owned on macOS and most Linux
+The log goes to `/var/log/redmine-mcp.log`. That directory is root-owned on macOS and most Linux
 distributions, so unless you grant access once:
 
 ```bash
-sudo install -o "$(whoami)" -m 644 /dev/null /var/logs/redmine-mcp.log
+sudo install -o "$(whoami)" -m 644 /dev/null /var/log/redmine-mcp.log
 ```
 
 the server falls back to `~/.local/state/redmine-mcp.log`. Set `REDMINE_MCP_LOG` to choose

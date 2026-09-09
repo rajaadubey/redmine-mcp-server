@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-const PREFERRED = "/var/logs/redmine-mcp.log";
+const PREFERRED = "/var/log/redmine-mcp.log";
 const FALLBACK = join(homedir(), ".local", "state", "redmine-mcp.log");
 
 /** Values whose contents must never reach the log. */
@@ -18,8 +18,8 @@ function tryOpen(path: string): string | null {
   }
 }
 
-// Resolved once at startup: explicit override, then /var/logs, then a
-// user-writable fallback (/var/logs needs root on most systems).
+// Resolved once at startup: explicit override, then /var/log, then a
+// user-writable fallback (/var/log needs root on most systems).
 export const logFile =
   tryOpen(process.env.REDMINE_MCP_LOG ?? PREFERRED) ?? tryOpen(FALLBACK);
 
