@@ -36,6 +36,13 @@ export interface RedmineJournal {
   details?: RedmineJournalDetail[];
 }
 
+export interface RedmineCustomField {
+  id: number;
+  name: string;
+  /** Multi-value fields return an array. */
+  value?: string | string[] | null;
+}
+
 export interface RedmineIssue {
   id: number;
   subject: string;
@@ -50,6 +57,9 @@ export interface RedmineIssue {
   created_on: string;
   updated_on: string;
   journals?: RedmineJournal[];
+  category?: { id: number; name: string };
+  fixed_version?: { id: number; name: string };
+  custom_fields?: RedmineCustomField[];
 }
 
 export interface RedmineNamed {
@@ -222,7 +232,11 @@ export class RedmineClient {
     description?: string;
     tracker_id?: number;
     priority_id?: number;
+    status_id?: number;
+    category_id?: number;
+    fixed_version_id?: number;
     assigned_to_id?: number;
+    custom_fields?: { id: number; value: string | string[] }[];
   }): Promise<RedmineIssue> {
     const data = await this.request<{ issue: RedmineIssue }>("POST", "/issues.json", {
       body: { issue: payload },
@@ -269,6 +283,35 @@ export class RedmineClient {
       memberships: { user?: RedmineNamed; group?: RedmineNamed }[];
     }>("GET", `/projects/${projectId}/memberships.json`, { query: { limit: 100 } });
     return data!.memberships.flatMap((m) => (m.user ? [m.user] : []));
+  }
+
+  /**
+   * Custom fields usable on this project's issues. Uses the project include,
+   * which any member can read; /custom_fields.json is admin-only.
+   */
+  async listProjectCustomFields(projectId: number | string): Promise<RedmineNamed[]> {
+    const data = await this.request<{ project: { issue_custom_fields?: RedmineNamed[] } }>(
+      "GET",
+      `/projects/${projectId}.json`,
+      { query: { include: "issue_custom_fields" } },
+    );
+    return data!.project.issue_custom_fields ?? [];
+  }
+
+  async listVersions(projectId: number | string): Promise<RedmineNamed[]> {
+    const data = await this.request<{ versions: RedmineNamed[] }>(
+      "GET",
+      `/projects/${projectId}/versions.json`,
+    );
+    return data!.versions;
+  }
+
+  async listIssueCategories(projectId: number | string): Promise<RedmineNamed[]> {
+    const data = await this.request<{ issue_categories: RedmineNamed[] }>(
+      "GET",
+      `/projects/${projectId}/issue_categories.json`,
+    );
+    return data!.issue_categories;
   }
 
   async listTimeEntryActivities(): Promise<RedmineNamed[]> {

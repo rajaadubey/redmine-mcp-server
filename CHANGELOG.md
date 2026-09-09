@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-09
+
+### Added
+
+- **`list_project_fields`** — a project's issue custom fields (with the ids `create_issue` needs),
+  target versions and issue categories. Uses `/projects/:id.json?include=issue_custom_fields`,
+  readable by any project member, rather than the admin-only `/custom_fields.json`. Versions and
+  categories are optional Redmine modules, so a 403/404 on either degrades to a note instead of
+  failing the whole call.
+- **`create_issue`** now accepts `custom_fields` (`{id, value}`, value may be an array for
+  multi-value fields), `status`, `category`, and `target_version` / `fixed_version_id`. Status,
+  category and version are resolved by name and report the valid options when no match is found.
+- **`get_issue`** now echoes custom field values with their ids, plus category and target version,
+  so values can be copied from an existing issue into `create_issue`.
+
 ## [1.1.0] - 2026-09-09
 
 ### Added
@@ -52,5 +67,6 @@ Initial release.
 - `redmine-mcp-server` bin entry for global installation.
 - Configuration via `REDMINE_URL` and `REDMINE_API_KEY`.
 
+[1.2.0]: https://github.com/rajaadubey/redmine-mcp-server/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rajaadubey/redmine-mcp-server/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rajaadubey/redmine-mcp-server/releases/tag/v1.0.0

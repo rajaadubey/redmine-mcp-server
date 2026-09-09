@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { log, errorInfo } from "./logger.js";
-import { RedmineApiError, RedmineClient, RedmineIssue, RedmineIssueStatus, RedmineNamed, RedmineUser } from "./redmine.js";
+import { RedmineApiError, RedmineClient, RedmineIssue, RedmineIssueStatus, RedmineNamed, RedmineUser, RedmineCustomField } from "./redmine.js";
 
 function formatIssueSummary(issue: RedmineIssue): string {
   return [
@@ -18,10 +18,17 @@ function formatIssueDetail(issue: RedmineIssue): string {
     `Tracker: ${issue.tracker.name} | Status: ${issue.status.name} | Priority: ${issue.priority.name}`,
     `Author: ${issue.author.name} | Assignee: ${issue.assigned_to?.name ?? "(unassigned)"}`,
     `Done: ${issue.done_ratio ?? 0}% | Created: ${issue.created_on} | Updated: ${issue.updated_on}`,
+    `Category: ${issue.category?.name ?? "(none)"} | Target version: ${issue.fixed_version?.name ?? "(none)"}`,
     "",
     "Description:",
     issue.description?.trim() || "(none)",
   ];
+
+  if (issue.custom_fields?.length) {
+    // ids included so the values can be copied straight into create_issue.
+    lines.push("", "Custom fields:");
+    for (const f of issue.custom_fields) lines.push(`- ${formatCustomField(f)}`);
+  }
 
   if (issue.journals?.length) {
     lines.push("", "History / Comments:");
@@ -54,6 +61,11 @@ function formatNamedList(items: RedmineNamed[]): string {
 /** Resolve a tracker/priority name to its id, case-insensitively. */
 function resolveNamed(items: RedmineNamed[], name: string): RedmineNamed | undefined {
   return items.find((i) => i.name.toLowerCase() === name.toLowerCase());
+}
+
+function formatCustomField(f: RedmineCustomField): string {
+  const value = Array.isArray(f.value) ? f.value.join(", ") : f.value;
+  return `[id ${f.id}] ${f.name}: ${value === undefined || value === null || value === "" ? "(empty)" : value}`;
 }
 
 function formatUser(u: RedmineUser): string {
@@ -260,10 +272,49 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
           .positive()
           .optional()
           .describe("User id to assign the issue to (see find_user). Ignored if assign_to_me is set."),
+        status: z
+          .string()
+          .optional()
+          .describe("Initial status name (see list_enumerations). Defaults to the tracker's default status."),
+        category: z.string().optional().describe("Issue category name (see list_project_fields)."),
+        target_version: z
+          .string()
+          .optional()
+          .describe("Target version / milestone name (see list_project_fields)."),
+        fixed_version_id: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Target version id, as an alternative to target_version."),
+        custom_fields: z
+          .array(
+            z.object({
+              id: z.number().int().positive().describe("Custom field id (see list_project_fields)."),
+              value: z
+                .union([z.string(), z.array(z.string())])
+                .describe("Value, or an array of values for a multi-value field."),
+            }),
+          )
+          .optional()
+          .describe("Custom field values to set on the new issue."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ project, subject, description, tracker, priority, assign_to_me, assignee_id }) => {
+    async ({
+      project,
+      subject,
+      description,
+      tracker,
+      priority,
+      assign_to_me,
+      assignee_id,
+      status,
+      category,
+      target_version,
+      fixed_version_id,
+      custom_fields,
+    }) => {
       let tracker_id: number | undefined;
       if (tracker) {
         const trackers = await client.listTrackers();
@@ -294,6 +345,57 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
         priority_id = match.id;
       }
 
+      let status_id: number | undefined;
+      if (status) {
+        const resolved = await resolveStatusId(client, status);
+        if (!resolved) {
+          const statuses = await client.listIssueStatuses();
+          return {
+            content: [
+              { type: "text", text: `Unknown status "${status}". Available:\n${formatStatusList(statuses)}` },
+            ],
+            isError: true,
+          };
+        }
+        status_id = resolved.id;
+      }
+
+      let category_id: number | undefined;
+      if (category) {
+        const categories = await client.listIssueCategories(project);
+        const match = resolveNamed(categories, category);
+        if (!match) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown category "${category}" in ${project}. Available:\n${formatNamedList(categories) || "(none)"}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        category_id = match.id;
+      }
+
+      let version_id = fixed_version_id;
+      if (target_version) {
+        const versions = await client.listVersions(project);
+        const match = resolveNamed(versions, target_version);
+        if (!match) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown version "${target_version}" in ${project}. Available:\n${formatNamedList(versions) || "(none)"}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        version_id = match.id;
+      }
+
       const issue = await client.createIssue({
         project_id: project,
         subject,
@@ -301,6 +403,10 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
         tracker_id,
         priority_id,
         assigned_to_id: assign_to_me ? (await client.getCurrentUser()).id : assignee_id,
+        status_id,
+        category_id,
+        fixed_version_id: version_id,
+        custom_fields,
       });
 
       return {
@@ -392,6 +498,41 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     async ({ issue_id, comment }) => {
       await client.updateIssue(issue_id, { notes: comment });
       return { content: [{ type: "text", text: `Added comment to issue #${issue_id}.` }] };
+    },
+  );
+
+  registerTool(
+    "list_project_fields",
+    {
+      title: "List project fields",
+      description:
+        "List a project's issue custom fields (with the ids create_issue needs), target versions and issue categories. Instance-wide lists like trackers and priorities are in list_enumerations.",
+      inputSchema: {
+        project: z.string().describe("Project identifier or numeric id (see list_projects)."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ project }) => {
+      // Versions and categories are optional Redmine modules; a 403/404 on
+      // either should not sink the custom field list, which is the point here.
+      const [customFields, versions, categories] = await Promise.all([
+        client.listProjectCustomFields(project),
+        client.listVersions(project).catch(() => null),
+        client.listIssueCategories(project).catch(() => null),
+      ]);
+
+      const section = (title: string, items: RedmineNamed[] | null, empty: string) =>
+        [`${title}:`, items === null ? empty : items.length ? formatNamedList(items) : "(none)"].join("\n");
+
+      const text = [
+        section("Issue custom fields (use the id in create_issue)", customFields, "(unavailable)"),
+        "",
+        section("Target versions", versions, "(module disabled or not permitted)"),
+        "",
+        section("Issue categories", categories, "(module disabled or not permitted)"),
+      ].join("\n");
+
+      return { content: [{ type: "text", text }] };
     },
   );
 

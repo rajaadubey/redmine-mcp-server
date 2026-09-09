@@ -110,13 +110,14 @@ the volume ever matters.
 ## Tools
 
 - **list_my_issues** — list issues assigned to you (`status`: open/closed/all).
-- **get_issue** — full details + comment history for one issue.
+- **get_issue** — full details, custom field values (with ids) and comment history for one issue.
 - **search_issues** — filter issues by project/subject/status/assignee.
 - **search** — full-text search across issues (and optionally wiki + news).
 - **list_enumerations** — valid status, tracker, priority and time-entry-activity names/ids for this Redmine instance.
 - **update_issue** — change status/% done/assignee and/or add a note.
 - **add_comment** — add a comment without changing fields.
-- **create_issue** — create an issue in a project.
+- **create_issue** — create an issue: tracker, priority, status, category, target version, assignee and custom field values.
+- **list_project_fields** — a project's custom field ids, target versions and issue categories.
 - **find_user** — look up user ids by name/login, to assign issues (pass a project if you are not admin).
 - **log_time** — log hours against an issue or project.
 - **list_projects** — list visible projects (id/identifier/name).
@@ -127,6 +128,8 @@ the volume ever matters.
 - "Show me the details and history of issue 1234."
 - "Find open bugs in the web project mentioning login."
 - "Create a bug in the web project: checkout page 500s on submit."
+- "What custom fields does the web project have?"
+- "Create that same issue in the web project, copying the custom fields from issue 1234."
 - "Assign issue 1234 to Raja."
 - "Log 2 hours on issue 1234 for code review."
 - "Mark issue 1234 as Resolved and note that it's deployed to prod."
