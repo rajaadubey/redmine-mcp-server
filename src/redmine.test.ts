@@ -15,7 +15,15 @@ const { loadConfig } = await import("./config.js");
 const calls: { url: string; method: string; body?: string }[] = [];
 globalThis.fetch = (async (url: URL, init: RequestInit) => {
   calls.push({ url: url.toString(), method: init.method!, body: init.body as string });
-  return new Response(JSON.stringify({ issues: [], results: [], total_count: 0, issue: { id: 1 } }), {
+  return new Response(JSON.stringify({
+      issues: [],
+      results: [],
+      users: [],
+      memberships: [],
+      total_count: 0,
+      issue: { id: 1 },
+      time_entry: { id: 1, hours: 1.5, spent_on: "2026-09-09" },
+    }), {
     status: 200,
   });
 }) as typeof fetch;
@@ -39,6 +47,18 @@ assert.equal(calls.at(-1)!.method, "POST");
 assert.deepEqual(JSON.parse(calls.at(-1)!.body!), {
   issue: { project_id: "web", subject: "hi", tracker_id: 2 },
 });
+
+await c.createTimeEntry({ issue_id: 5, hours: 1.5, activity_id: 9, comments: "work" });
+assert.equal(calls.at(-1)!.method, "POST");
+assert.deepEqual(JSON.parse(calls.at(-1)!.body!), {
+  time_entry: { issue_id: 5, hours: 1.5, activity_id: 9, comments: "work" },
+});
+
+await c.listUsers({ name: "raja" });
+assert.match(calls.at(-1)!.url, /\/users\.json\?name=raja/);
+
+await c.listProjectMembers("web");
+assert.match(calls.at(-1)!.url, /\/projects\/web\/memberships\.json/);
 
 // Config file is used when env vars are absent, and env wins when present.
 writeFileSync(process.env.REDMINE_MCP_CONFIG!, JSON.stringify({ url: "https://file", apiKey: "fk" }));

@@ -255,6 +255,44 @@ export class RedmineClient {
     return data!;
   }
 
+  /** Admin-only in Redmine; non-admins get 403 and should search project members instead. */
+  async listUsers(params: { name?: string; limit?: number }): Promise<RedmineUser[]> {
+    const data = await this.request<{ users: RedmineUser[] }>("GET", "/users.json", {
+      query: { name: params.name, limit: params.limit ?? 25 },
+    });
+    return data!.users;
+  }
+
+  /** Visible to any project member, unlike /users.json. */
+  async listProjectMembers(projectId: number | string): Promise<RedmineNamed[]> {
+    const data = await this.request<{
+      memberships: { user?: RedmineNamed; group?: RedmineNamed }[];
+    }>("GET", `/projects/${projectId}/memberships.json`, { query: { limit: 100 } });
+    return data!.memberships.flatMap((m) => (m.user ? [m.user] : []));
+  }
+
+  async listTimeEntryActivities(): Promise<RedmineNamed[]> {
+    const data = await this.request<{ time_entry_activities: RedmineNamed[] }>(
+      "GET",
+      "/enumerations/time_entry_activities.json",
+    );
+    return data!.time_entry_activities;
+  }
+
+  async createTimeEntry(payload: {
+    issue_id?: number;
+    project_id?: number | string;
+    hours: number;
+    spent_on?: string;
+    activity_id?: number;
+    comments?: string;
+  }): Promise<{ id: number; hours: number; spent_on: string }> {
+    const data = await this.request<{
+      time_entry: { id: number; hours: number; spent_on: string };
+    }>("POST", "/time_entries.json", { body: { time_entry: payload } });
+    return data!.time_entry;
+  }
+
   async listTrackers(): Promise<RedmineNamed[]> {
     const data = await this.request<{ trackers: RedmineNamed[] }>("GET", "/trackers.json");
     return data!.trackers;

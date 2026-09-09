@@ -113,10 +113,12 @@ the volume ever matters.
 - **get_issue** — full details + comment history for one issue.
 - **search_issues** — filter issues by project/subject/status/assignee.
 - **search** — full-text search across issues (and optionally wiki + news).
-- **list_enumerations** — valid status, tracker and priority names/ids for this Redmine instance.
-- **update_issue** — change status/% done and/or add a note.
+- **list_enumerations** — valid status, tracker, priority and time-entry-activity names/ids for this Redmine instance.
+- **update_issue** — change status/% done/assignee and/or add a note.
 - **add_comment** — add a comment without changing fields.
 - **create_issue** — create an issue in a project.
+- **find_user** — look up user ids by name/login, to assign issues (pass a project if you are not admin).
+- **log_time** — log hours against an issue or project.
 - **list_projects** — list visible projects (id/identifier/name).
 
 ## Example prompts
@@ -125,6 +127,8 @@ the volume ever matters.
 - "Show me the details and history of issue 1234."
 - "Find open bugs in the web project mentioning login."
 - "Create a bug in the web project: checkout page 500s on submit."
+- "Assign issue 1234 to Raja."
+- "Log 2 hours on issue 1234 for code review."
 - "Mark issue 1234 as Resolved and note that it's deployed to prod."
 - "Add a comment to issue 1234 saying I'm blocked on QA."
 
