@@ -6,7 +6,7 @@ import { registerRedmineTools } from "./tools.js";
 import { log, errorInfo, logFile } from "./logger.js";
 import { login, configFile } from "./config.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 async function main() {
   if (process.argv[2] === "login") {

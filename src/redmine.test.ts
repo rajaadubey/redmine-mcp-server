@@ -22,6 +22,9 @@ globalThis.fetch = (async (url: URL, init: RequestInit) => {
       memberships: [],
       total_count: 0,
       issue: { id: 1 },
+      project: { id: 1, issue_custom_fields: [] },
+      versions: [],
+      issue_categories: [],
       time_entry: { id: 1, hours: 1.5, spent_on: "2026-09-09" },
     }), {
     status: 200,
@@ -47,6 +50,31 @@ assert.equal(calls.at(-1)!.method, "POST");
 assert.deepEqual(JSON.parse(calls.at(-1)!.body!), {
   issue: { project_id: "web", subject: "hi", tracker_id: 2 },
 });
+
+await c.createIssue({
+  project_id: "web",
+  subject: "cf",
+  status_id: 3,
+  category_id: 4,
+  fixed_version_id: 8,
+  custom_fields: [{ id: 12, value: "abc" }, { id: 13, value: ["x", "y"] }],
+});
+assert.deepEqual(JSON.parse(calls.at(-1)!.body!), {
+  issue: {
+    project_id: "web",
+    subject: "cf",
+    status_id: 3,
+    category_id: 4,
+    fixed_version_id: 8,
+    custom_fields: [{ id: 12, value: "abc" }, { id: 13, value: ["x", "y"] }],
+  },
+});
+
+await c.listProjectCustomFields("web");
+assert.match(calls.at(-1)!.url, /\/projects\/web\.json\?include=issue_custom_fields/);
+
+await c.listVersions("web");
+assert.match(calls.at(-1)!.url, /\/projects\/web\/versions\.json/);
 
 await c.createTimeEntry({ issue_id: 5, hours: 1.5, activity_id: 9, comments: "work" });
 assert.equal(calls.at(-1)!.method, "POST");
