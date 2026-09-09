@@ -1,6 +1,16 @@
 // Run: npx tsx src/redmine.test.ts
 import assert from "node:assert";
-import { RedmineClient } from "./redmine.js";
+import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+const dir = mkdtempSync(join(tmpdir(), "redmine-mcp-"));
+process.env.REDMINE_MCP_CONFIG = join(dir, "config.json");
+process.env.REDMINE_MCP_LOG = join(dir, "test.log");
+
+const { RedmineClient } = await import("./redmine.js");
+const { log, logFile } = await import("./logger.js");
+const { loadConfig } = await import("./config.js");
 
 const calls: { url: string; method: string; body?: string }[] = [];
 globalThis.fetch = (async (url: URL, init: RequestInit) => {
@@ -29,5 +39,20 @@ assert.equal(calls.at(-1)!.method, "POST");
 assert.deepEqual(JSON.parse(calls.at(-1)!.body!), {
   issue: { project_id: "web", subject: "hi", tracker_id: 2 },
 });
+
+// Config file is used when env vars are absent, and env wins when present.
+writeFileSync(process.env.REDMINE_MCP_CONFIG!, JSON.stringify({ url: "https://file", apiKey: "fk" }));
+delete process.env.REDMINE_URL;
+delete process.env.REDMINE_API_KEY;
+assert.deepEqual(loadConfig(), { url: "https://file", apiKey: "fk" });
+process.env.REDMINE_URL = "https://env";
+assert.equal(loadConfig().url, "https://env", "env must override the config file");
+delete process.env.REDMINE_URL;
+
+// Secrets must never reach the log.
+log("info", "probe", { api_key: "topsecret", nested: { token: "topsecret" }, keep: "visible" });
+const written = readFileSync(logFile!, "utf8");
+assert.doesNotMatch(written, /topsecret/, "secret-looking fields must be redacted");
+assert.match(written, /"keep":"visible"/);
 
 console.log(`ok — ${calls.length} requests checked`);

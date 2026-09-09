@@ -1,3 +1,6 @@
+import { log, errorInfo } from "./logger.js";
+import { loadConfig } from "./config.js";
+
 export interface RedmineIssueStatus {
   id: number;
   name: string;
@@ -83,17 +86,14 @@ export class RedmineClient {
   private currentUser: RedmineUser | null = null;
 
   constructor(baseUrl?: string, apiKey?: string) {
-    const url = baseUrl ?? process.env.REDMINE_URL;
-    const key = apiKey ?? process.env.REDMINE_API_KEY;
+    const configured = baseUrl && apiKey ? { url: baseUrl, apiKey } : loadConfig();
+    const url = baseUrl ?? configured.url;
+    const key = apiKey ?? configured.apiKey;
 
-    if (!url) {
+    if (!url || !key) {
       throw new Error(
-        "REDMINE_URL is not set. Set it to the base URL of your Redmine instance, e.g. https://redmine.example.com",
-      );
-    }
-    if (!key) {
-      throw new Error(
-        "REDMINE_API_KEY is not set. Find your API key under Redmine -> My account -> API access key.",
+        "No Redmine credentials found. Run `redmine-mcp-server login` to save them, " +
+          "or set REDMINE_URL and REDMINE_API_KEY.",
       );
     }
 
@@ -113,14 +113,26 @@ export class RedmineClient {
       }
     }
 
-    const res = await fetch(url, {
-      method,
-      headers: {
-        "X-Redmine-API-Key": this.apiKey,
-        "Content-Type": "application/json",
-      },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    });
+    // The API key travels in a header and is never logged; the path and query are.
+    log("info", "http_request", { method, path, query: options.query, has_body: options.body !== undefined });
+    const started = Date.now();
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          "X-Redmine-API-Key": this.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (err) {
+      log("error", "http_failed", { method, path, ms: Date.now() - started, ...errorInfo(err) });
+      throw err;
+    }
+
+    const ms = Date.now() - started;
 
     if (!res.ok) {
       let detail = res.statusText;
@@ -130,8 +142,11 @@ export class RedmineClient {
       } catch {
         // response had no JSON body; fall back to statusText
       }
+      log("error", "http_response", { method, path, status: res.status, ms, detail });
       throw new RedmineApiError(`Redmine API error (${res.status}): ${detail}`, res.status);
     }
+
+    log("info", "http_response", { method, path, status: res.status, ms });
 
     if (res.status === 204) return null;
 

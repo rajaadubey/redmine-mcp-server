@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { log, errorInfo } from "./logger.js";
 import { RedmineClient, RedmineIssue, RedmineIssueStatus, RedmineNamed } from "./redmine.js";
 
 function formatIssueSummary(issue: RedmineIssue): string {
@@ -62,7 +63,27 @@ function formatStatusList(statuses: RedmineIssueStatus[]): string {
 }
 
 export function registerRedmineTools(server: McpServer, client: RedmineClient) {
-  server.registerTool(
+  // Same signature as server.registerTool, so call sites keep their inferred
+  // arg types; every call, result and failure is logged.
+  const registerTool: typeof server.registerTool = (name, config, cb: any) =>
+    server.registerTool(name, config, (async (args: any, extra: any) => {
+      const started = Date.now();
+      log("info", "tool_call", { tool: name, args });
+      try {
+        const result = await cb(args, extra);
+        log(result?.isError ? "warn" : "info", "tool_result", {
+          tool: name,
+          ms: Date.now() - started,
+          is_error: Boolean(result?.isError),
+        });
+        return result;
+      } catch (err) {
+        log("error", "tool_failed", { tool: name, ms: Date.now() - started, ...errorInfo(err) });
+        throw err;
+      }
+    }) as any);
+
+  registerTool(
     "list_my_issues",
     {
       title: "List my issues",
@@ -95,7 +116,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "get_issue",
     {
       title: "Get issue",
@@ -111,7 +132,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "list_enumerations",
     {
       title: "List enumerations",
@@ -140,7 +161,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "search_issues",
     {
       title: "Search issues",
@@ -178,7 +199,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "search",
     {
       title: "Search Redmine",
@@ -212,7 +233,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "create_issue",
     {
       title: "Create issue",
@@ -273,7 +294,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "update_issue",
     {
       title: "Update issue",
@@ -328,7 +349,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "add_comment",
     {
       title: "Add comment",
@@ -345,7 +366,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "list_projects",
     {
       title: "List projects",
