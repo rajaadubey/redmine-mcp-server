@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { log, errorInfo } from "./logger.js";
-import { RedmineApiError, RedmineClient, RedmineIssue, RedmineIssueStatus, RedmineNamed, RedmineUser, RedmineCustomField } from "./redmine.js";
+import { IssueUpdate, RedmineApiError, RedmineClient, RedmineCustomField, RedmineIssue, RedmineIssueStatus, RedmineNamed, RedmineUser } from "./redmine.js";
 
 function formatIssueSummary(issue: RedmineIssue): string {
   return [
@@ -19,16 +19,42 @@ function formatIssueDetail(issue: RedmineIssue): string {
     `Author: ${issue.author.name} | Assignee: ${issue.assigned_to?.name ?? "(unassigned)"}`,
     `Done: ${issue.done_ratio ?? 0}% | Created: ${issue.created_on} | Updated: ${issue.updated_on}`,
     `Category: ${issue.category?.name ?? "(none)"} | Target version: ${issue.fixed_version?.name ?? "(none)"}`,
-    "",
-    "Description:",
-    issue.description?.trim() || "(none)",
   ];
+  const extra = [
+    issue.start_date && `Start: ${issue.start_date}`,
+    issue.due_date && `Due: ${issue.due_date}`,
+    issue.estimated_hours != null && `Estimate: ${issue.estimated_hours}h`,
+    issue.parent && `Parent: #${issue.parent.id}`,
+  ].filter(Boolean);
+  if (extra.length) lines.push(extra.join(" | "));
 
-  if (issue.custom_fields?.length) {
-    // ids included so the values can be copied straight into create_issue.
-    lines.push("", "Custom fields:");
-    for (const f of issue.custom_fields) lines.push(`- ${formatCustomField(f)}`);
+  const cfs = (issue.custom_fields ?? []).filter((cf) =>
+    Array.isArray(cf.value) ? cf.value.length : cf.value,
+  );
+  if (cfs.length) {
+    // ids included so values can be copied into create_issue / update_issue / search_issues.
+    lines.push("", "Custom fields (empty ones hidden):");
+    for (const f of cfs) lines.push(`- ${formatCustomField(f)}`);
   }
+  if (issue.relations?.length) {
+    lines.push("", "Relations:");
+    for (const r of issue.relations) {
+      const other = r.issue_id === issue.id ? r.issue_to_id : r.issue_id;
+      const dir = r.issue_id === issue.id ? r.relation_type : `${r.relation_type} (from #${other})`;
+      lines.push(`- ${dir} #${other} (relation id ${r.id})`);
+    }
+  }
+  if (issue.children?.length) {
+    lines.push("", "Subtasks:", ...issue.children.map((c) => `- #${c.id} [${c.tracker.name}] ${c.subject}`));
+  }
+  if (issue.attachments?.length) {
+    lines.push("", "Attachments:", ...issue.attachments.map((a) => `- ${a.filename} (${a.filesize} bytes) ${a.content_url}`));
+  }
+  if (issue.watchers?.length) {
+    lines.push("", `Watchers: ${issue.watchers.map((w) => w.name).join(", ")}`);
+  }
+
+  lines.push("", "Description:", issue.description?.trim() || "(none)");
 
   if (issue.journals?.length) {
     lines.push("", "History / Comments:");
@@ -104,7 +130,8 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "list_my_issues",
     {
       title: "List my issues",
-      description: "List Redmine issues assigned to the current user (identified by the configured API key).",
+      description:
+        "Quick list of issues assigned to the current user. Use for 'what's on my plate?'. For any other filter (project, dates, tracker, custom fields) use search_issues.",
       inputSchema: {
         status: z
           .enum(["open", "closed", "all"])
@@ -137,14 +164,15 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "get_issue",
     {
       title: "Get issue",
-      description: "Get full details of a single Redmine issue, including its description and comment/change history.",
+      description:
+        "Get everything about ONE issue when you already know its id: description, custom fields, relations, subtasks, attachments, watchers and full comment/change history. To find issues, use search_issues or search first.",
       inputSchema: {
         issue_id: z.number().int().positive().describe("The Redmine issue ID."),
       },
       annotations: { readOnlyHint: true },
     },
     async ({ issue_id }) => {
-      const issue = await client.getIssue(issue_id, { includeJournals: true });
+      const issue = await client.getIssue(issue_id, { full: true });
       return { content: [{ type: "text", text: formatIssueDetail(issue) }] };
     },
   );
@@ -154,7 +182,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     {
       title: "List enumerations",
       description:
-        "List the statuses, trackers, priorities and time entry activities available in this Redmine instance (name and id), needed by update_issue, create_issue and log_time.",
+        "List instance-wide statuses, trackers, priorities and time-entry activities (name and id). Use when you need a valid name for status/tracker/priority/activity. For project-specific things (custom fields, versions, which trackers a project uses) use describe_project.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
@@ -187,33 +215,113 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     {
       title: "Search issues",
       description:
-        "Search issues by project, status, assignee and/or subject text. All filters are optional; with none, returns the most recently updated issues.",
+        "Find issues by structured filters: project, status, tracker, priority, assignee, author, version, dates, custom fields, or a saved query. " +
+        "Use this whenever you know WHICH attributes the issues have. Use `search` instead when you only have free-text keywords to look for in descriptions/comments. " +
+        "All filters are optional and combine with AND; with none, returns the most recently updated open issues. " +
+        "Date/custom-field values use Redmine's operator prefixes: '>=2026-01-01', '<=2026-01-31', '><2026-01-01|2026-01-31' (between), '>t-7' (in the last 7 days), " +
+        "'~text' (contains), '!value' (not), '*' (any value), '!*' (no value); a bare value means equals.",
       inputSchema: {
         project: z.string().optional().describe("Project identifier or numeric id (see list_projects)."),
         subject: z.string().optional().describe("Substring to match against the issue subject."),
         status: z
-          .enum(["open", "closed", "all"])
+          .string()
           .optional()
-          .describe("Filter by status. Defaults to 'open'."),
+          .describe("'open' (default), 'closed', 'all', or an exact status name such as 'In Progress' (see list_enumerations)."),
+        tracker: z.string().optional().describe("Tracker name, e.g. 'Bug' (see list_enumerations or describe_project)."),
+        priority: z.string().optional().describe("Priority name, e.g. 'High' (see list_enumerations)."),
         assigned_to_me: z.boolean().optional().describe("Only issues assigned to the current user."),
-        limit: z.number().int().positive().max(100).optional().describe("Max issues to return (default 25)."),
+        assignee_id: z.number().int().positive().optional().describe("Only issues assigned to this user id (see find_user)."),
+        author_me: z.boolean().optional().describe("Only issues the current user created."),
+        version_id: z.number().int().positive().optional().describe("Target version id (see describe_project)."),
+        parent_id: z.number().int().positive().optional().describe("Only subtasks of this issue."),
+        created: z.string().optional().describe("Created-date filter, e.g. '>=2026-11-01' or '>t-30'."),
+        updated: z.string().optional().describe("Updated-date filter, e.g. '>t-7'."),
+        due: z.string().optional().describe("Due-date filter, e.g. '<=2026-12-31' or '!*' (no due date)."),
+        custom_fields: z
+          .record(z.string().regex(/^\d+$/), z.string())
+          .optional()
+          .describe(
+            "Custom field filters keyed by field id (from describe_project), e.g. {\"13\": \"Android\", \"45\": \"<=2026-12-01\"}. " +
+              "Redmine silently ignores filters on unknown or non-filterable fields, so pass `project` to have ids checked.",
+          ),
+        query_id: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Run a saved query (see list_saved_queries). Its own filters replace status and the other filters here; project, sort and limit still apply."),
+        sort: z.string().optional().describe("Sort, e.g. 'due_date:asc' or 'priority:desc,updated_on:desc'. Default 'updated_on:desc'."),
+        limit: z.number().int().positive().max(100).optional().describe("Max issues to return (default 25, Redmine max 100)."),
+        offset: z.number().int().min(0).optional().describe("Skip this many issues, for paging past the first 100."),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ project, subject, status, assigned_to_me, limit }) => {
+    async (a) => {
+      const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
+      const filters: Record<string, string | number | undefined> = {
+        created_on: a.created,
+        updated_on: a.updated,
+        due_date: a.due,
+        fixed_version_id: a.version_id,
+        parent_id: a.parent_id,
+      };
+
+      let statusId: string | undefined = a.query_id ? undefined : "open";
+      if (a.status) {
+        if (["open", "closed", "all"].includes(a.status.toLowerCase())) {
+          statusId = { open: "open", closed: "closed", all: "*" }[a.status.toLowerCase()];
+        } else {
+          const statuses = await client.listIssueStatuses();
+          const match = resolveNamed(statuses, a.status);
+          if (!match) return fail(`Unknown status "${a.status}". Available:\n${formatStatusList(statuses)}`);
+          statusId = String(match.id);
+        }
+      }
+      if (a.tracker) {
+        const trackers = await client.listTrackers();
+        const match = resolveNamed(trackers, a.tracker);
+        if (!match) return fail(`Unknown tracker "${a.tracker}". Available:\n${formatNamedList(trackers)}`);
+        filters.tracker_id = match.id;
+      }
+      if (a.priority) {
+        const priorities = await client.listPriorities();
+        const match = resolveNamed(priorities, a.priority);
+        if (!match) return fail(`Unknown priority "${a.priority}". Available:\n${formatNamedList(priorities)}`);
+        filters.priority_id = match.id;
+      }
+      if (a.author_me) filters.author_id = "me";
+
+      if (a.custom_fields) {
+        if (a.project) {
+          // Redmine drops filters on unknown custom fields and returns everything; refuse instead.
+          const known = (await client.getProject(a.project)).issue_custom_fields ?? [];
+          const unknown = Object.keys(a.custom_fields).filter((id) => !known.some((f) => String(f.id) === id));
+          if (unknown.length) {
+            return fail(`Project ${a.project} has no custom field ${unknown.join(", ")}. Its fields:\n${formatNamedList(known)}`);
+          }
+        }
+        for (const [id, v] of Object.entries(a.custom_fields)) filters[`cf_${id}`] = v;
+      }
+
       const { issues, total_count } = await client.listIssues({
-        projectId: project,
-        subject,
-        statusId: status ?? "open",
-        assignedToId: assigned_to_me ? (await client.getCurrentUser()).id : undefined,
-        limit,
+        projectId: a.project,
+        subject: a.subject,
+        statusId,
+        assignedToId: a.assigned_to_me ? "me" : a.assignee_id,
+        limit: a.limit,
+        offset: a.offset,
+        sort: a.sort,
+        queryId: a.query_id,
+        filters,
       });
 
       if (issues.length === 0) {
         return { content: [{ type: "text", text: "No matching issues found." }] };
       }
 
-      const text = `Found ${total_count} issue(s), showing ${issues.length}:\n\n${issues
+      const more = total_count > (a.offset ?? 0) + issues.length ? ` Use offset ${(a.offset ?? 0) + issues.length} for more.` : "";
+      const caveat = a.custom_fields && !a.project ? "\n(Custom field ids were not checked; if the count looks like 'everything', the id is probably wrong.)" : "";
+      const text = `Found ${total_count} issue(s), showing ${issues.length}.${more}${caveat}\n\n${issues
         .map(formatIssueSummary)
         .join("\n\n")}`;
       return { content: [{ type: "text", text }] };
@@ -225,7 +333,9 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     {
       title: "Search Redmine",
       description:
-        "Full-text search across Redmine. Use this when you have keywords but no issue id; use search_issues when you want to filter by project/status/assignee instead.",
+        "Full-text keyword search across issue subjects, descriptions and comments (optionally wiki pages and news). " +
+        "Use this when you only have words to look for (an error message, a feature name) and no structured filter. " +
+        "Use search_issues instead when you can say which project/status/tracker/assignee/dates you want; it is exact and pageable.",
       inputSchema: {
         query: z.string().min(1).describe("Search keywords."),
         project: z.string().optional().describe("Restrict to a project identifier or numeric id."),
@@ -258,7 +368,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "create_issue",
     {
       title: "Create issue",
-      description: "Create a new Redmine issue in a project.",
+      description: "Create a new issue in a project. Check search_issues/search first if it might already exist. Use describe_project to see the project's trackers.",
       inputSchema: {
         project: z.string().describe("Project identifier or numeric id (see list_projects)."),
         subject: z.string().min(1).describe("Issue subject / title."),
@@ -276,11 +386,11 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
           .string()
           .optional()
           .describe("Initial status name (see list_enumerations). Defaults to the tracker's default status."),
-        category: z.string().optional().describe("Issue category name (see list_project_fields)."),
+        category: z.string().optional().describe("Issue category name (see describe_project)."),
         target_version: z
           .string()
           .optional()
-          .describe("Target version / milestone name (see list_project_fields)."),
+          .describe("Target version / milestone name (see describe_project)."),
         fixed_version_id: z
           .number()
           .int()
@@ -290,7 +400,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
         custom_fields: z
           .array(
             z.object({
-              id: z.number().int().positive().describe("Custom field id (see list_project_fields)."),
+              id: z.number().int().positive().describe("Custom field id (see describe_project)."),
               value: z
                 .union([z.string(), z.array(z.string())])
                 .describe("Value, or an array of values for a multi-value field."),
@@ -419,67 +529,83 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "update_issue",
     {
       title: "Update issue",
-      description: "Update a Redmine issue's status, % done, and/or add a note describing the update.",
+      description:
+        "Change one or more fields of an existing issue in a single write: status, assignee, % done, subject, description, tracker, priority, dates, estimate, version, parent, custom fields, with an optional note. " +
+        "Use add_comment instead if you only want to add a comment. Use link_issues for relations (blocks, relates, duplicates). " +
+        "Redmine rejects the whole update if any value is invalid (e.g. a status change your role's workflow doesn't allow) and returns the reason.",
       inputSchema: {
         issue_id: z.number().int().positive().describe("The Redmine issue ID."),
         status: z
           .string()
           .optional()
-          .describe("New status name, e.g. 'In Progress', 'Resolved', 'Closed'. Must match an existing status (see list_enumerations)."),
+          .describe("New status name, e.g. 'In Progress', 'Resolved' (see list_enumerations)."),
         done_ratio: z.number().int().min(0).max(100).optional().describe("New % done (0-100)."),
-        assignee_id: z
-          .number()
-          .int()
-          .positive()
+        assignee_id: z.number().int().positive().optional().describe("User id to assign the issue to (see find_user)."),
+        subject: z.string().min(1).optional().describe("New subject."),
+        description: z.string().optional().describe("New description. Replaces the whole description."),
+        tracker: z.string().optional().describe("New tracker name (see list_enumerations)."),
+        priority: z.string().optional().describe("New priority name (see list_enumerations)."),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD."),
+        due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD."),
+        estimated_hours: z.number().min(0).optional().describe("Estimated hours."),
+        version_id: z.number().int().positive().optional().describe("Target version id (see describe_project)."),
+        parent_issue_id: z.number().int().positive().optional().describe("Make this issue a subtask of that issue."),
+        custom_fields: z
+          .record(z.string().regex(/^\d+$/), z.union([z.string(), z.array(z.string())]))
           .optional()
-          .describe("User id to assign the issue to (see find_user)."),
+          .describe(
+            "Custom field values keyed by field id (see describe_project / get_issue), e.g. {\"13\": \"Android\", \"45\": \"2026-12-01\"}. " +
+              "User-type fields take a user id as a string. Use an array only for multi-value fields.",
+          ),
         notes: z.string().optional().describe("Note to attach to this update."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ issue_id, status, done_ratio, assignee_id, notes }) => {
-      const payload: {
-        status_id?: number;
-        done_ratio?: number;
-        assigned_to_id?: number;
-        notes?: string;
-      } = {};
+    async (a) => {
+      const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
+      const payload: IssueUpdate = {
+        done_ratio: a.done_ratio,
+        assigned_to_id: a.assignee_id,
+        subject: a.subject,
+        description: a.description,
+        start_date: a.start_date,
+        due_date: a.due_date,
+        estimated_hours: a.estimated_hours,
+        fixed_version_id: a.version_id,
+        parent_issue_id: a.parent_issue_id,
+        notes: a.notes || undefined,
+      };
 
-      if (status) {
-        const resolved = await resolveStatusId(client, status);
+      if (a.status) {
+        const resolved = await resolveStatusId(client, a.status);
         if (!resolved) {
-          const statuses = await client.listIssueStatuses();
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Unknown status "${status}". Available statuses:\n${formatStatusList(statuses)}`,
-              },
-            ],
-            isError: true,
-          };
+          return fail(`Unknown status "${a.status}". Available statuses:\n${formatStatusList(await client.listIssueStatuses())}`);
         }
         payload.status_id = resolved.id;
       }
-      if (done_ratio !== undefined) payload.done_ratio = done_ratio;
-      if (assignee_id !== undefined) payload.assigned_to_id = assignee_id;
-      if (notes) payload.notes = notes;
-
-      if (Object.keys(payload).length === 0) {
-        return {
-          content: [
-            { type: "text", text: "Nothing to update — provide status, done_ratio, assignee_id, and/or notes." },
-          ],
-          isError: true,
-        };
+      if (a.tracker) {
+        const trackers = await client.listTrackers();
+        const match = resolveNamed(trackers, a.tracker);
+        if (!match) return fail(`Unknown tracker "${a.tracker}". Available:\n${formatNamedList(trackers)}`);
+        payload.tracker_id = match.id;
+      }
+      if (a.priority) {
+        const priorities = await client.listPriorities();
+        const match = resolveNamed(priorities, a.priority);
+        if (!match) return fail(`Unknown priority "${a.priority}". Available:\n${formatNamedList(priorities)}`);
+        payload.priority_id = match.id;
+      }
+      if (a.custom_fields) {
+        payload.custom_fields = Object.entries(a.custom_fields).map(([id, value]) => ({ id: Number(id), value }));
       }
 
-      await client.updateIssue(issue_id, payload);
-      const issue = await client.getIssue(issue_id);
+      const sent = Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== undefined)) as IssueUpdate;
+      if (Object.keys(sent).length === 0) return fail("Nothing to update — provide at least one field or notes.");
+
+      await client.updateIssue(a.issue_id, sent);
+      const issue = await client.getIssue(a.issue_id);
       return {
-        content: [
-          { type: "text", text: `Updated issue #${issue_id}.\n\n${formatIssueSummary(issue)}` },
-        ],
+        content: [{ type: "text", text: `Updated issue #${a.issue_id}.\n\n${formatIssueSummary(issue)}` }],
       };
     },
   );
@@ -488,7 +614,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "add_comment",
     {
       title: "Add comment",
-      description: "Add a comment to a Redmine issue without changing any of its fields.",
+      description: "Add a comment to an issue without changing any field. Use update_issue (with notes) when you are also changing fields, so it is one journal entry.",
       inputSchema: {
         issue_id: z.number().int().positive().describe("The Redmine issue ID."),
         comment: z.string().min(1).describe("The comment text to add."),
@@ -502,46 +628,11 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
   );
 
   registerTool(
-    "list_project_fields",
-    {
-      title: "List project fields",
-      description:
-        "List a project's issue custom fields (with the ids create_issue needs), target versions and issue categories. Instance-wide lists like trackers and priorities are in list_enumerations.",
-      inputSchema: {
-        project: z.string().describe("Project identifier or numeric id (see list_projects)."),
-      },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ project }) => {
-      // Versions and categories are optional Redmine modules; a 403/404 on
-      // either should not sink the custom field list, which is the point here.
-      const [customFields, versions, categories] = await Promise.all([
-        client.listProjectCustomFields(project),
-        client.listVersions(project).catch(() => null),
-        client.listIssueCategories(project).catch(() => null),
-      ]);
-
-      const section = (title: string, items: RedmineNamed[] | null, empty: string) =>
-        [`${title}:`, items === null ? empty : items.length ? formatNamedList(items) : "(none)"].join("\n");
-
-      const text = [
-        section("Issue custom fields (use the id in create_issue)", customFields, "(unavailable)"),
-        "",
-        section("Target versions", versions, "(module disabled or not permitted)"),
-        "",
-        section("Issue categories", categories, "(module disabled or not permitted)"),
-      ].join("\n");
-
-      return { content: [{ type: "text", text }] };
-    },
-  );
-
-  registerTool(
     "find_user",
     {
       title: "Find user",
       description:
-        "Find Redmine users by name or login, to get the user id needed to assign an issue. Pass a project to search its members — the instance-wide user list is admin-only.",
+        "Turn a person's name into the user id that update_issue, create_issue and search_issues need. Always pass a project unless you are admin: the instance-wide user list is admin-only.",
       inputSchema: {
         name: z.string().optional().describe("Name or login to match. Omit to list everyone visible."),
         project: z
@@ -554,7 +645,21 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     },
     async ({ name, project, limit }) => {
       if (project) {
-        const members = await client.listProjectMembers(project);
+        let members: RedmineNamed[];
+        let source = "";
+        try {
+          members = await client.listProjectMembers(project);
+        } catch (err) {
+          if (!(err instanceof RedmineApiError)) throw err;
+          // Memberships can be forbidden or broken (500 seen on some instances); people on
+          // recent issues are a good-enough stand-in.
+          // ponytail: last 100 issues only; widen if someone old can't be found.
+          const { issues } = await client.listIssues({ projectId: project, statusId: "*", limit: 100 });
+          const seen = new Map<number, RedmineNamed>();
+          for (const i of issues) for (const u of [i.assigned_to, i.author]) if (u) seen.set(u.id, u);
+          members = [...seen.values()];
+          source = `(Member list unavailable: HTTP ${err.status}. Showing people from the project's last 100 issues.)\n`;
+        }
         const matched = name
           ? members.filter((m) => m.name.toLowerCase().includes(name.toLowerCase()))
           : members;
@@ -562,9 +667,11 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
           content: [
             {
               type: "text",
-              text: matched.length
-                ? formatNamedList(matched.slice(0, limit ?? 25))
-                : `No members of "${project}" match${name ? ` "${name}"` : ""}.`,
+              text:
+                source +
+                (matched.length
+                  ? formatNamedList(matched.slice(0, limit ?? 25))
+                  : `No members of "${project}" match${name ? ` "${name}"` : ""}.`),
             },
           ],
         };
@@ -604,7 +711,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "log_time",
     {
       title: "Log time",
-      description: "Log time spent against a Redmine issue (or a project, if no issue is given).",
+      description: "Record hours spent on an issue (or a project). Use list_time_entries to see what was already logged.",
       inputSchema: {
         issue_id: z.number().int().positive().optional().describe("Issue to log against."),
         project: z
@@ -670,7 +777,7 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
     "list_projects",
     {
       title: "List projects",
-      description: "List Redmine projects visible to the current user (id, identifier, name).",
+      description: "List projects visible to you (id, identifier, name). Use to turn a project name into the identifier other tools need; use describe_project for one project's trackers, custom fields and versions.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
@@ -680,6 +787,145 @@ export function registerRedmineTools(server: McpServer, client: RedmineClient) {
         .map((p) => `${p.id}: ${p.identifier} — ${p.name}`)
         .join("\n");
       return { content: [{ type: "text", text: text || "No projects found." }] };
+    },
+  );
+
+  registerTool(
+    "describe_project",
+    {
+      title: "Describe project",
+      description:
+        "Show one project's trackers, custom fields (with the ids create_issue, update_issue and search_issues need), versions and issue categories. " +
+        "Use before filtering or setting custom fields or versions. For instance-wide statuses/priorities use list_enumerations.",
+      inputSchema: {
+        project: z.string().describe("Project identifier or numeric id (see list_projects)."),
+        include_closed_versions: z.boolean().optional().describe("Also list closed/locked versions (default false)."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ project, include_closed_versions }) => {
+      // Versions and categories are optional modules; a 403 on either shouldn't sink the rest.
+      const [p, versions, categories] = await Promise.all([
+        client.getProject(project),
+        client.listVersions(project).catch(() => null),
+        client.listIssueCategories(project).catch(() => null),
+      ]);
+      const shown = (versions ?? []).filter((v) => include_closed_versions || v.status === "open");
+      const text = [
+        `${p.id}: ${p.identifier} — ${p.name}`,
+        "",
+        "Trackers:",
+        formatNamedList(p.trackers ?? []) || "(none)",
+        "",
+        "Custom fields (filter/update with these ids):",
+        formatNamedList(p.issue_custom_fields ?? []) || "(none)",
+        "",
+        `Versions${include_closed_versions ? "" : " (open)"}:`,
+        versions === null
+          ? "(not visible to you)"
+          : shown.map((v) => `${v.id}: ${v.name} [${v.status}]${v.due_date ? ` due ${v.due_date}` : ""}${v.project.id !== p.id ? ` (shared from ${v.project.name})` : ""}`).join("\n") || "(none)",
+        "",
+        "Issue categories:",
+        categories === null ? "(module disabled or not permitted)" : formatNamedList(categories) || "(none)",
+      ].join("\n");
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  registerTool(
+    "list_saved_queries",
+    {
+      title: "List saved queries",
+      description:
+        "List the saved issue queries (custom filters) you can see, public and private. " +
+        "Use when the user names a saved filter ('the On Hold query') or a team view; then run it with search_issues query_id.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const queries = await client.listQueries();
+      const text = queries
+        .map((q) => `${q.id}: ${q.name} (${q.is_public ? "public" : "private"}${q.project_id ? `, project ${q.project_id}` : ""})`)
+        .join("\n");
+      return { content: [{ type: "text", text: text || "No saved queries visible." }] };
+    },
+  );
+
+  registerTool(
+    "link_issues",
+    {
+      title: "Link issues",
+      description:
+        "Create a relation between two issues (relates, blocks, precedes, duplicates, copied_to and their reverses). " +
+        "Use for 'X blocks Y' / 'mark as duplicate of'. Use update_issue parent_issue_id for a parent/subtask link instead. " +
+        "get_issue shows existing relations with their relation ids.",
+      inputSchema: {
+        issue_id: z.number().int().positive().describe("The issue the relation starts from."),
+        to_issue_id: z.number().int().positive().describe("The other issue."),
+        relation: z
+          .enum(["relates", "duplicates", "duplicated", "blocks", "blocked", "precedes", "follows", "copied_to", "copied_from"])
+          .describe("Read as: issue_id <relation> to_issue_id, e.g. 101 blocks 202."),
+        delay_days: z.number().int().min(0).optional().describe("Only for precedes/follows: gap in days."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ issue_id, to_issue_id, relation, delay_days }) => {
+      const r = await client.createRelation(issue_id, { issue_to_id: to_issue_id, relation_type: relation, delay: delay_days });
+      return { content: [{ type: "text", text: `Linked: #${issue_id} ${relation} #${to_issue_id} (relation id ${r.id}).` }] };
+    },
+  );
+
+  registerTool(
+    "unlink_issues",
+    {
+      title: "Unlink issues",
+      description: "Remove one relation between issues by its relation id (shown by get_issue). Does not touch the issues themselves.",
+      inputSchema: {
+        relation_id: z.number().int().positive().describe("Relation id from get_issue's Relations list."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    async ({ relation_id }) => {
+      await client.deleteRelation(relation_id);
+      return { content: [{ type: "text", text: `Removed relation ${relation_id}.` }] };
+    },
+  );
+
+  registerTool(
+    "list_time_entries",
+    {
+      title: "List time entries",
+      description:
+        "Show logged time with a total: yours by default, or for an issue/project/date range. " +
+        "Use for 'what did I log this week?' or 'how much time went into #123?'. Use log_time to add an entry.",
+      inputSchema: {
+        issue_id: z.number().int().positive().optional().describe("Only time on this issue."),
+        project: z.string().optional().describe("Only time in this project."),
+        everyone: z.boolean().optional().describe("Include other people's time (default: only yours)."),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Start date, YYYY-MM-DD."),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("End date, YYYY-MM-DD."),
+        limit: z.number().int().positive().max(100).optional().describe("Max entries (default 100)."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ issue_id, project, everyone, from, to, limit }) => {
+      const { time_entries, total_count } = await client.listTimeEntries({
+        userId: everyone ? undefined : "me",
+        issueId: issue_id,
+        projectId: project,
+        from,
+        to,
+        limit,
+      });
+      if (!time_entries.length) return { content: [{ type: "text", text: "No time entries found." }] };
+      const total = time_entries.reduce((sum, e) => sum + e.hours, 0);
+      const partial = total_count > time_entries.length ? ` (first ${time_entries.length} of ${total_count} entries; narrow the dates for an exact total)` : "";
+      const text =
+        `Total: ${Math.round(total * 100) / 100}h${partial}\n\n` +
+        time_entries
+          .map((e) => `${e.spent_on} ${e.hours}h ${e.user.name} — ${e.project.name}${e.issue ? ` #${e.issue.id}` : ""} [${e.activity.name}]${e.comments ? ` ${e.comments}` : ""}`)
+          .join("\n");
+      return { content: [{ type: "text", text }] };
     },
   );
 }

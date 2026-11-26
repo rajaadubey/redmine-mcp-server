@@ -107,20 +107,33 @@ tail -f ~/.redmine-mcp.log
 There is no rotation — point `REDMINE_MCP_LOG` at a path covered by `logrotate`/`newsyslog` if
 the volume ever matters.
 
-## Tools
+## Tools — which one to use
 
-- **list_my_issues** — list issues assigned to you (`status`: open/closed/all).
-- **get_issue** — full details, custom field values (with ids) and comment history for one issue.
-- **search_issues** — filter issues by project/subject/status/assignee.
-- **search** — full-text search across issues (and optionally wiki + news).
-- **list_enumerations** — valid status, tracker, priority and time-entry-activity names/ids for this Redmine instance.
-- **update_issue** — change status/% done/assignee and/or add a note.
-- **add_comment** — add a comment without changing fields.
-- **create_issue** — create an issue: tracker, priority, status, category, target version, assignee and custom field values.
-- **list_project_fields** — a project's custom field ids, target versions and issue categories.
-- **find_user** — look up user ids by name/login, to assign issues (pass a project if you are not admin).
-- **log_time** — log hours against an issue or project.
-- **list_projects** — list visible projects (id/identifier/name).
+The server also sends this guide to Claude as its MCP `instructions`, so Claude picks the right tool on its own.
+
+| You want to… | Use | Not |
+| --- | --- | --- |
+| See one issue you have the id of (fields, custom fields, relations, subtasks, attachments, history) | **get_issue** | |
+| See what's assigned to you | **list_my_issues** | |
+| Filter issues by project, status, tracker, priority, assignee, author, version, dates or custom fields | **search_issues** | `search` (keywords only, can't filter) |
+| Run a saved filter / team view | **list_saved_queries** → **search_issues** `query_id` | |
+| Look for words (error text, feature name) with no other filter | **search** (also wiki/news) | `search_issues` (matches subject only) |
+| Get a project identifier from its name | **list_projects** | |
+| Get a project's trackers, custom field ids, versions, categories | **describe_project** | `list_enumerations` (instance-wide only) |
+| Get valid status / tracker / priority / activity names | **list_enumerations** | |
+| Get a person's user id | **find_user** with a project | without a project (admin-only) |
+| Only add a comment | **add_comment** | |
+| Change any field(s), optionally with a note | **update_issue** (one call, one journal entry) | several `add_comment` + updates |
+| Create an issue (tracker, priority, status, category, version, assignee, custom fields) | **create_issue** | |
+| Mark blocks / relates / duplicates / precedes | **link_issues** | `update_issue` (that's for parent/subtask) |
+| Remove a relation | **unlink_issues** (relation id from `get_issue`) | |
+| Log hours | **log_time** | |
+| See logged hours and totals | **list_time_entries** | |
+
+Filter values in `search_issues` use Redmine's operator prefixes: `>=2026-01-01`, `<=…`,
+`><2026-01-01|2026-01-31` (between), `>t-7` (last 7 days), `~text` (contains), `!x` (not),
+`*` (any value), `!*` (empty). Redmine silently ignores filters on unknown custom field ids, so
+pass `project` and `search_issues` checks the ids first.
 
 ## Example prompts
 
@@ -134,6 +147,10 @@ the volume ever matters.
 - "Log 2 hours on issue 1234 for code review."
 - "Mark issue 1234 as Resolved and note that it's deployed to prod."
 - "Add a comment to issue 1234 saying I'm blocked on QA."
+- "Open bugs in analytics where Platform is Android, created in the last 30 days."
+- "Run the On Hold query."
+- "Mark 1234 as blocking 1240."
+- "How many hours did I log this month?"
 
 ## Manual testing
 

@@ -70,8 +70,8 @@ assert.deepEqual(JSON.parse(calls.at(-1)!.body!), {
   },
 });
 
-await c.listProjectCustomFields("web");
-assert.match(calls.at(-1)!.url, /\/projects\/web\.json\?include=issue_custom_fields/);
+await c.getProject("web");
+assert.match(calls.at(-1)!.url, /\/projects\/web\.json\?include=trackers%2Cissue_custom_fields/);
 
 await c.listVersions("web");
 assert.match(calls.at(-1)!.url, /\/projects\/web\/versions\.json/);
@@ -87,6 +87,23 @@ assert.match(calls.at(-1)!.url, /\/users\.json\?name=raja/);
 
 await c.listProjectMembers("web");
 assert.match(calls.at(-1)!.url, /\/projects\/web\/memberships\.json/);
+
+await c.listIssues({ projectId: 26, statusId: "*", queryId: 70, filters: { cf_13: "Android", created_on: ">=2026-01-01", tracker_id: undefined } });
+assert.match(calls.at(-1)!.url, /cf_13=Android/);
+assert.match(calls.at(-1)!.url, /created_on=%3E%3D2026-01-01/, "operator prefix must reach Redmine encoded");
+assert.match(calls.at(-1)!.url, /query_id=70/);
+assert.doesNotMatch(calls.at(-1)!.url, /tracker_id/, "undefined filters must be omitted");
+
+await c.createRelation(5, { issue_to_id: 6, relation_type: "blocks" });
+assert.match(calls.at(-1)!.url, /\/issues\/5\/relations\.json$/);
+assert.deepEqual(JSON.parse(calls.at(-1)!.body!), { relation: { issue_to_id: 6, relation_type: "blocks" } });
+
+await c.updateIssue(5, { custom_fields: [{ id: 13, value: ["a", "b"] }] });
+assert.equal(calls.at(-1)!.method, "PUT");
+assert.deepEqual(JSON.parse(calls.at(-1)!.body!), { issue: { custom_fields: [{ id: 13, value: ["a", "b"] }] } });
+
+await c.listTimeEntries({ userId: "me", from: "2026-11-01" });
+assert.match(calls.at(-1)!.url, /time_entries\.json\?user_id=me&from=2026-11-01/);
 
 // Config file is used when env vars are absent, and env wins when present.
 writeFileSync(process.env.REDMINE_MCP_CONFIG!, JSON.stringify({ url: "https://file", apiKey: "fk" }));
