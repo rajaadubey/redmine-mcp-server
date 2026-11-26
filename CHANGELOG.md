@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-26
+
+### Added
+
+- **`describe_project`** — a project's trackers, custom field ids and versions.
+- **`list_saved_queries`** — saved issue queries; run one with `search_issues` `query_id`.
+- **`link_issues`** / **`unlink_issues`** — create and remove issue relations.
+- **`list_time_entries`** — logged time with a total, yours by default.
+- `search_issues` filters: status by name, tracker, priority, assignee id, author, version,
+  parent, created/updated/due dates, custom fields, saved query, sort and offset.
+  Custom field ids are checked against the project, because Redmine silently ignores unknown ones.
+- `update_issue` fields: subject, description, tracker, priority, start/due date, estimate,
+  version, parent and custom fields.
+- `get_issue` now shows custom fields, dates, version, parent, relations, subtasks,
+  attachments and watchers.
+- MCP server `instructions`: a guide telling the client which tool to use when.
+
+### Changed
+
+- `find_user` with a project falls back to people on the project's last 100 issues when the
+  memberships endpoint fails (it returns 500 on some instances).
+
 ## [1.1.0] - 2026-09-09
 
 ### Added

@@ -49,7 +49,80 @@ export interface RedmineIssue {
   done_ratio?: number;
   created_on: string;
   updated_on: string;
+  start_date?: string;
+  due_date?: string;
+  estimated_hours?: number;
+  fixed_version?: RedmineNamed;
+  parent?: { id: number };
+  custom_fields?: RedmineCustomFieldValue[];
   journals?: RedmineJournal[];
+  relations?: RedmineRelation[];
+  children?: { id: number; tracker: RedmineNamed; subject: string }[];
+  attachments?: { id: number; filename: string; filesize: number; content_url: string }[];
+  watchers?: RedmineNamed[];
+}
+
+export interface RedmineCustomFieldValue {
+  id: number;
+  name: string;
+  multiple?: boolean;
+  value: string | string[] | null;
+}
+
+export interface RedmineRelation {
+  id: number;
+  issue_id: number;
+  issue_to_id: number;
+  relation_type: string;
+  delay?: number | null;
+}
+
+export interface RedmineProjectDetail extends RedmineProject {
+  description?: string;
+  trackers?: RedmineNamed[];
+  issue_custom_fields?: RedmineNamed[];
+}
+
+export interface RedmineVersion extends RedmineNamed {
+  project: RedmineNamed;
+  status: string;
+  due_date?: string | null;
+}
+
+export interface RedmineQuery extends RedmineNamed {
+  is_public: boolean;
+  project_id: number | null;
+}
+
+export interface RedmineTimeEntry {
+  id: number;
+  project: RedmineNamed;
+  issue?: { id: number };
+  user: RedmineNamed;
+  activity: RedmineNamed;
+  hours: number;
+  comments: string;
+  spent_on: string;
+}
+
+/** Extra issue-list filters, sent as Redmine's simple query params (e.g. created_on=>=2026-01-01, cf_5=~foo). */
+export type IssueFilters = Record<string, string | number | undefined>;
+
+export interface IssueUpdate {
+  status_id?: number;
+  assigned_to_id?: number;
+  done_ratio?: number;
+  notes?: string;
+  subject?: string;
+  description?: string;
+  tracker_id?: number;
+  priority_id?: number;
+  start_date?: string;
+  due_date?: string;
+  estimated_hours?: number;
+  fixed_version_id?: number;
+  parent_issue_id?: number;
+  custom_fields?: { id: number; value: string | string[] }[];
 }
 
 export interface RedmineNamed {
@@ -170,6 +243,8 @@ export class RedmineClient {
     limit?: number;
     offset?: number;
     sort?: string;
+    queryId?: number;
+    filters?: IssueFilters;
   }): Promise<{ issues: RedmineIssue[]; total_count: number }> {
     const data = await this.request<{ issues: RedmineIssue[]; total_count: number }>(
       "GET",
@@ -183,14 +258,17 @@ export class RedmineClient {
           limit: params.limit ?? 25,
           offset: params.offset,
           sort: params.sort ?? "updated_on:desc",
+          query_id: params.queryId,
+          ...params.filters,
         },
       },
     );
     return data!;
   }
 
-  async getIssue(id: number, opts: { includeJournals?: boolean } = {}): Promise<RedmineIssue> {
-    const include = opts.includeJournals ? "journals,attachments" : undefined;
+  async getIssue(id: number, opts: { full?: boolean } = {}): Promise<RedmineIssue> {
+    // watchers/children are silently omitted when hidden or empty, so asking costs nothing.
+    const include = opts.full ? "journals,attachments,relations,children,watchers" : undefined;
     const data = await this.request<{ issue: RedmineIssue }>("GET", `/issues/${id}.json`, {
       query: { include },
     });
@@ -199,12 +277,7 @@ export class RedmineClient {
 
   async updateIssue(
     id: number,
-    payload: {
-      status_id?: number;
-      assigned_to_id?: number;
-      done_ratio?: number;
-      notes?: string;
-    },
+    payload: IssueUpdate,
   ): Promise<void> {
     await this.request("PUT", `/issues/${id}.json`, { body: { issue: payload } });
   }
@@ -312,5 +385,62 @@ export class RedmineClient {
       "/issue_statuses.json",
     );
     return data!.issue_statuses;
+  }
+
+  async getProject(id: number | string): Promise<RedmineProjectDetail> {
+    const data = await this.request<{ project: RedmineProjectDetail }>("GET", `/projects/${id}.json`, {
+      query: { include: "trackers,issue_custom_fields" },
+    });
+    return data!.project;
+  }
+
+  /** Includes versions shared into the project from elsewhere. */
+  async listVersions(projectId: number | string): Promise<RedmineVersion[]> {
+    const data = await this.request<{ versions: RedmineVersion[] }>("GET", `/projects/${projectId}/versions.json`);
+    return data!.versions;
+  }
+
+  async listQueries(): Promise<RedmineQuery[]> {
+    const data = await this.request<{ queries: RedmineQuery[] }>("GET", "/queries.json", { query: { limit: 100 } });
+    return data!.queries;
+  }
+
+  async createRelation(
+    issueId: number,
+    relation: { issue_to_id: number; relation_type: string; delay?: number },
+  ): Promise<RedmineRelation> {
+    const data = await this.request<{ relation: RedmineRelation }>("POST", `/issues/${issueId}/relations.json`, {
+      body: { relation },
+    });
+    return data!.relation;
+  }
+
+  async deleteRelation(relationId: number): Promise<void> {
+    await this.request("DELETE", `/relations/${relationId}.json`);
+  }
+
+  async listTimeEntries(params: {
+    userId?: number | "me";
+    projectId?: number | string;
+    issueId?: number;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }): Promise<{ time_entries: RedmineTimeEntry[]; total_count: number }> {
+    const data = await this.request<{ time_entries: RedmineTimeEntry[]; total_count: number }>(
+      "GET",
+      "/time_entries.json",
+      {
+        query: {
+          user_id: params.userId,
+          project_id: params.projectId,
+          issue_id: params.issueId,
+          from: params.from,
+          to: params.to,
+          limit: params.limit ?? 100,
+        },
+      },
+    );
+    return data!;
   }
 }
