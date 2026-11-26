@@ -119,12 +119,12 @@ The server also sends this guide to Claude as its MCP `instructions`, so Claude 
 | Run a saved filter / team view | **list_saved_queries** → **search_issues** `query_id` | |
 | Look for words (error text, feature name) with no other filter | **search** (also wiki/news) | `search_issues` (matches subject only) |
 | Get a project identifier from its name | **list_projects** | |
-| Get a project's trackers, custom field ids, versions | **describe_project** | `list_enumerations` (instance-wide only) |
+| Get a project's trackers, custom field ids, versions, categories | **describe_project** | `list_enumerations` (instance-wide only) |
 | Get valid status / tracker / priority / activity names | **list_enumerations** | |
 | Get a person's user id | **find_user** with a project | without a project (admin-only) |
 | Only add a comment | **add_comment** | |
 | Change any field(s), optionally with a note | **update_issue** (one call, one journal entry) | several `add_comment` + updates |
-| Create an issue | **create_issue** | |
+| Create an issue (tracker, priority, status, category, version, assignee, custom fields) | **create_issue** | |
 | Mark blocks / relates / duplicates / precedes | **link_issues** | `update_issue` (that's for parent/subtask) |
 | Remove a relation | **unlink_issues** (relation id from `get_issue`) | |
 | Log hours | **log_time** | |
@@ -141,6 +141,8 @@ pass `project` and `search_issues` checks the ids first.
 - "Show me the details and history of issue 1234."
 - "Find open bugs in the web project mentioning login."
 - "Create a bug in the web project: checkout page 500s on submit."
+- "What custom fields does the web project have?"
+- "Create that same issue in the web project, copying the custom fields from issue 1234."
 - "Assign issue 1234 to Raja."
 - "Log 2 hours on issue 1234 for code review."
 - "Mark issue 1234 as Resolved and note that it's deployed to prod."

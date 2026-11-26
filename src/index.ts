@@ -6,7 +6,7 @@ import { registerRedmineTools } from "./tools.js";
 import { log, errorInfo, logFile } from "./logger.js";
 import { login, configFile } from "./config.js";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 const INSTRUCTIONS = `Which Redmine tool to use:
 

@@ -3,11 +3,11 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0] - 2026-11-26
+## [1.3.0] - 2026-11-26
 
 ### Added
 
-- **`describe_project`** — a project's trackers, custom field ids and versions.
+- **`describe_project`** — a project's trackers, custom field ids, versions and issue categories.
 - **`list_saved_queries`** — saved issue queries; run one with `search_issues` `query_id`.
 - **`link_issues`** / **`unlink_issues`** — create and remove issue relations.
 - **`list_time_entries`** — logged time with a total, yours by default.
@@ -16,14 +16,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Custom field ids are checked against the project, because Redmine silently ignores unknown ones.
 - `update_issue` fields: subject, description, tracker, priority, start/due date, estimate,
   version, parent and custom fields.
-- `get_issue` now shows custom fields, dates, version, parent, relations, subtasks,
-  attachments and watchers.
+- `get_issue` now shows dates, estimate, parent, relations, subtasks, attachments and
+  watchers. Empty custom fields are hidden.
 - MCP server `instructions`: a guide telling the client which tool to use when.
 
 ### Changed
 
+- **`list_project_fields` is replaced by `describe_project`**, which returns the same custom
+  fields, versions and categories plus trackers. `create_issue` now points to it.
+
 - `find_user` with a project falls back to people on the project's last 100 issues when the
   memberships endpoint fails (it returns 500 on some instances).
+
+## [1.2.0] - 2026-09-09
+
+### Added
+
+- **`list_project_fields`** — a project's issue custom fields (with the ids `create_issue` needs),
+  target versions and issue categories. Uses `/projects/:id.json?include=issue_custom_fields`,
+  readable by any project member, rather than the admin-only `/custom_fields.json`. Versions and
+  categories are optional Redmine modules, so a 403/404 on either degrades to a note instead of
+  failing the whole call.
+- **`create_issue`** now accepts `custom_fields` (`{id, value}`, value may be an array for
+  multi-value fields), `status`, `category`, and `target_version` / `fixed_version_id`. Status,
+  category and version are resolved by name and report the valid options when no match is found.
+- **`get_issue`** now echoes custom field values with their ids, plus category and target version,
+  so values can be copied from an existing issue into `create_issue`.
 
 ## [1.1.0] - 2026-09-09
 
@@ -74,5 +92,6 @@ Initial release.
 - `redmine-mcp-server` bin entry for global installation.
 - Configuration via `REDMINE_URL` and `REDMINE_API_KEY`.
 
+[1.2.0]: https://github.com/rajaadubey/redmine-mcp-server/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rajaadubey/redmine-mcp-server/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rajaadubey/redmine-mcp-server/releases/tag/v1.0.0

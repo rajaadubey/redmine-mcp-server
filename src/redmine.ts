@@ -36,6 +36,14 @@ export interface RedmineJournal {
   details?: RedmineJournalDetail[];
 }
 
+export interface RedmineCustomField {
+  id: number;
+  name: string;
+  multiple?: boolean;
+  /** Multi-value fields return an array. */
+  value?: string | string[] | null;
+}
+
 export interface RedmineIssue {
   id: number;
   subject: string;
@@ -54,19 +62,13 @@ export interface RedmineIssue {
   estimated_hours?: number;
   fixed_version?: RedmineNamed;
   parent?: { id: number };
-  custom_fields?: RedmineCustomFieldValue[];
+  category?: RedmineNamed;
+  custom_fields?: RedmineCustomField[];
   journals?: RedmineJournal[];
   relations?: RedmineRelation[];
   children?: { id: number; tracker: RedmineNamed; subject: string }[];
   attachments?: { id: number; filename: string; filesize: number; content_url: string }[];
   watchers?: RedmineNamed[];
-}
-
-export interface RedmineCustomFieldValue {
-  id: number;
-  name: string;
-  multiple?: boolean;
-  value: string | string[] | null;
 }
 
 export interface RedmineRelation {
@@ -295,7 +297,11 @@ export class RedmineClient {
     description?: string;
     tracker_id?: number;
     priority_id?: number;
+    status_id?: number;
+    category_id?: number;
+    fixed_version_id?: number;
     assigned_to_id?: number;
+    custom_fields?: { id: number; value: string | string[] }[];
   }): Promise<RedmineIssue> {
     const data = await this.request<{ issue: RedmineIssue }>("POST", "/issues.json", {
       body: { issue: payload },
@@ -342,6 +348,14 @@ export class RedmineClient {
       memberships: { user?: RedmineNamed; group?: RedmineNamed }[];
     }>("GET", `/projects/${projectId}/memberships.json`, { query: { limit: 100 } });
     return data!.memberships.flatMap((m) => (m.user ? [m.user] : []));
+  }
+
+  async listIssueCategories(projectId: number | string): Promise<RedmineNamed[]> {
+    const data = await this.request<{ issue_categories: RedmineNamed[] }>(
+      "GET",
+      `/projects/${projectId}/issue_categories.json`,
+    );
+    return data!.issue_categories;
   }
 
   async listTimeEntryActivities(): Promise<RedmineNamed[]> {
